@@ -1,0 +1,57 @@
+# the hub: nginx proxy manager joins every app network; the tunnel joins only frontend-network
+# and waits for the proxy to be healthy before it connects. secrets live in .env.
+services:
+  npm:
+    image: 'jc21/nginx-proxy-manager:latest'
+    container_name: npm
+    restart: unless-stopped
+    ports:
+      - '80:80'   # Public HTTP
+      - '81:81'   # admin ui
+      - '443:443' # Public HTTPS
+    volumes:
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt
+
+    healthcheck:
+      test: ["CMD", "/usr/bin/check-health"] # NPM has a built-in health check script
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - frontend-network
+      - immich-network
+      - backrest-network
+      - files-network
+      - kuma-network
+      - adguard-network
+      - beszel-network
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-tunnel
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      # the tunnel token lives in .env, never in this file
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    networks:
+      - frontend-network
+    depends_on:
+      npm:
+        condition: service_healthy
+
+networks:
+  frontend-network:
+    external: true
+  immich-network:
+    external: true
+  backrest-network:
+    external: true
+  files-network:
+    external: true
+  kuma-network:
+    external: true
+  adguard-network:
+    external: true
+  beszel-network:
+    external: true

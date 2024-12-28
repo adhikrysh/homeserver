@@ -1,0 +1,31 @@
+# uptime checks. kuma joins each app's network so it can test the app directly, not only the proxy.
+services:
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
+    restart: always
+    volumes:
+      - ./data:/app/data
+    networks:
+      # kuma-network reaches npm. the other four let kuma reach each app directly,
+      # so a check tests the app itself, not only the proxy in front of it.
+      - kuma-network
+      - immich-network
+      - backrest-network
+      - files-network
+      - adguard-network
+      - beszel-network
+
+networks:
+  kuma-network:
+    external: true
+  immich-network:
+    external: true
+  backrest-network:
+    external: true
+  files-network:
+    external: true
+  adguard-network:
+    external: true
+  beszel-network:
+    external: true

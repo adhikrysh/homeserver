@@ -1,0 +1,17 @@
+# Mount My Drive on demand; shared instructions live beneath obsidian/.
+[Unit]
+Description=Google Drive My Drive mount
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/rclone mount second-brain: /home/drc/google-drive --drive-root-folder-id=root --config=/home/drc/.config/rclone/rclone.conf --vfs-cache-mode=full --cache-dir=/home/drc/.cache/rclone-second-brain --vfs-cache-max-age=1h --vfs-cache-max-size=256M --dir-cache-time=1m --poll-interval=15s --vfs-write-back=5s --tpslimit=5 --tpslimit-burst=5
+ExecStop=/usr/bin/fusermount3 -u /home/drc/google-drive
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=60
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

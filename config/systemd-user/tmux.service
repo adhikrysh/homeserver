@@ -1,0 +1,12 @@
+[Unit]
+Description=tmux server with an "hs" session, started at boot
+
+[Service]
+Type=forking
+ExecStart=/usr/bin/tmux new-session -d -s hs
+# Stopping or restarting this service kills every tmux session.
+ExecStop=/usr/bin/tmux kill-server
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

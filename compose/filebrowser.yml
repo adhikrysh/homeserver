@@ -1,0 +1,20 @@
+# web file manager over the data share. runs as a non-root uid; reachable only through the proxy.
+services:
+  filebrowser:
+    image: filebrowser/filebrowser
+    container_name: filebrowser
+    restart: unless-stopped
+    user: "1000:1001" # Matches your -u flag
+    # ports:
+    #   - 8080:80     # Disabled so only NPM can reach it
+    environment:
+      - FB_DATABASE=/database.db
+    volumes:
+      - /srv/sambashare/data:/srv                 # Your actual files
+      - ./filebrowser.db:/database.db
+    networks:
+      - files-network
+
+networks:
+  files-network:
+    external: true

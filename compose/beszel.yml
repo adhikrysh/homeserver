@@ -1,0 +1,33 @@
+# host and container metrics. the agent uses host networking and a read-only docker socket.
+# beszel: server stats. the hub is the dashboard; the agent reads this machine's
+# cpu, memory, disk, network, temperatures, and per-container usage, and talks to
+# the hub over a local socket file, authenticated with the hub's key.
+services:
+  beszel:
+    image: henrygd/beszel:latest
+    container_name: beszel
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./beszel_data:/beszel_data
+      - ./beszel_socket:/beszel_socket
+    networks:
+      - beszel-network
+
+  beszel-agent:
+    image: henrygd/beszel-agent:latest
+    container_name: beszel-agent
+    restart: unless-stopped
+    # host networking so the agent sees the real network interfaces, not a container's
+    network_mode: host
+    volumes:
+      - ./beszel_socket:/beszel_socket
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      LISTEN: /beszel_socket/beszel.sock
+      KEY: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIN+3xsdrxhP5NXahR0E8aSp1KsHDlBMYN+O22hscour"
+
+networks:
+  beszel-network:
+    external: true

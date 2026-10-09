@@ -1,46 +1,46 @@
 # homeserver
 
-bought a thinkpad t480 in dec 2024 and it somehow ended up running my whole life: photos, files, notes, and whatever my agents read before they touch anything. it's in singapore and i'm in palo alto, so every request swims the pacific.
+a thinkpad t480 i set up in dec 2024. it runs my photo library, file storage, music, dns, backups, my notes, and the claude code and codex sessions i leave running for hours. it sits in singapore and i work from palo alto, so most decisions here come down to two constraints: nothing exposed to the internet, and as few round trips across the pacific as possible.
 
-nothing is port-forwarded. the box tunnels out to cloudflare and everything comes in through that, so there's no door for anyone to knock on.
-
-## the box
+## hardware
 
 ```text
 thinkpad t480        i5-8350U, 4c/8t
-ram                  ~24 GB, ~3 used
+ram                  ~24 GB, ~3 GB in use
 disk                 477 GB nvme
 os                   ubuntu 24.04
-battery              held at 75-80%
+battery              charge held at 75-80%
 ```
 
-laptops make great servers. quiet, sips power, and the battery is a free ups. charge is capped so it doesn't turn into a spicy pillow.
+a laptop is a reasonable server for this load: low idle power, no fan noise, and the battery covers short power cuts. charge is capped at 80% because a cell held at 100% for years degrades and swells.
 
-## getting in
+## ingress
 
-`cloudflared` holds the tunnel, cloudflare does tls and access, nginx proxy manager routes by hostname. one wildcard dns record, so a new app is a compose file and a proxy host. every app gets its own docker network and only the proxy joins all of them, so the tunnel can't reach anything but the proxy.
+no ports are forwarded on the router and the home ip isn't in dns. `cloudflared` keeps an outbound tunnel to cloudflare, cloudflare terminates tls and enforces access policies, and nginx proxy manager routes by hostname.
 
 ```text
-edge (tls + access) -> cloudflared -> nginx proxy manager -> one network per app
+cloudflare edge (tls + access) -> cloudflared -> nginx proxy manager -> one docker network per app
 ```
 
-things that each ate an evening:
+a single wildcard record points every subdomain at the tunnel, so adding a service is a compose file and a proxy host with no dns change. each app has its own docker network and the proxy is the only container attached to all of them. the tunnel container is attached only to the frontend network, so it can reach the proxy and nothing else.
 
-- ssh shares the tunnel and routes match top-down, so with the wildcard first, ssh gets sent to nginx. nginx was confused.
-- the ssh route can't be `localhost:22` because that's the tunnel container. it points at the docker gateway.
-- let's encrypt never works behind cloudflare's proxy, so i stopped trying. edge cert outside, tunnel in the middle, plain http on a private bridge.
+details that matter:
 
-i log in through the browser, scripts use service tokens, and the immich ios app gets its own narrow policy because it can't do the browser login.
+- ssh uses the same tunnel on its own hostname. cloudflare evaluates routes in order, so the ssh route has to sit above the wildcard or ssh traffic is sent to nginx.
+- the ssh route targets the docker gateway address on the frontend network, since `localhost` inside the tunnel container is the container itself.
+- let's encrypt on the proxy fails behind cloudflare's proxying because the http challenge is intercepted. tls terminates at the edge instead, the tunnel encrypts the middle leg, and the last hop is plain http on a private bridge network.
+
+humans authenticate through the browser, scripts use service tokens, and the immich ios app has its own narrowly scoped policy because it can't complete a browser login.
 
 ## tailscale
 
-cloudflare is the front door, tailscale is the side door. three nodes (thinkpad, mac, phone), magicdns on, and the mac gets a direct wireguard path. samba and raw ports like beszel's dashboard only exist on the tailnet when i'm away from home. no exit node, no subnet routes, just a lan that follows me around.
+cloudflare handles everything that should have a public hostname. tailscale handles everything that shouldn't. the tailnet has three nodes (the server, my mac, my phone) with magicdns enabled, and the mac connects over a direct wireguard path rather than a relay. samba and navidrome are never published; off the home network the tailnet is the only route to them. no exit node and no subnet routing.
 
-having both means one of them can have a bad day and i'm still in.
+the two paths fail independently. a cloudflare incident doesn't cut me off, and neither does a stuck tailscale client on the laptop, because the tunnel runs as a container on the server.
 
 ## latency
 
-timed a request before touching anything (march, ~13,600 km):
+before tuning anything i broke a request down by phase (measured in march, ~13,600 km of fibre):
 
 ```text
 tcp connect     110 ms
@@ -48,65 +48,74 @@ tls             146 ms
 first byte      182 ms
 ```
 
-the server takes ~30ms. the pacific takes the rest and refuses to negotiate. so i cut round trips instead: bbr + `fq`, tcp fast open, no slow start after idle, shorter keepalives, gzip at 5, and http/2, which was somehow off on every proxy host. details in [`docs/latency.md`](docs/latency.md).
+server time is about 30ms. the rest is distance, so the only lever is reducing round trips:
+
+- bbr with `fq` instead of cubic, which holds throughput better on a long, lossy path
+- tcp fast open on client and server, saving a round trip on repeat connections
+- `tcp_slow_start_after_idle = 0`, so idle connections don't drop back to a small window
+- keepalives at ~1 minute instead of 2 hours, so dead connections are detected and replaced quickly
+- http/2 on every proxy host (it had been off)
+- gzip at level 5
+
+http/3 and brotli would help further, but nginx proxy manager supports neither. the largest remaining win is caching immich thumbnails at the edge. measurements and configs are in [`docs/latency.md`](docs/latency.md).
 
 ## dns
 
-adguard home is the dns resolver for my devices, so ads and trackers die at dns before anything even loads them. it also caches, which matters more than the blocking: a cold lookup was ~123ms and a cached one ~3ms, and with the pacific in the way i'll take every free 120ms i can get. its config is root-only, so the nightly backup reads it through `docker exec`.
+adguard home is the resolver for my devices. it blocks ad and tracker domains, and more importantly it caches: a cold lookup measured ~123ms, a cached one ~3ms. its config is root-owned, so the nightly backup reads it through `docker exec`.
 
 ## music
 
-my music runs on navidrome, which speaks the subsonic api, so basically any subsonic app on my phone or laptop just works against it. the library is mounted read-only, it rescans every hour, and sessions last a day so i'm not logging in every time i open the app. navidrome itself is only on the lan and the tailnet, never public. next to it there's a small shim i wrote that talks to navidrome's api and is the only thing allowed to write into the library.
+navidrome serves the music library over the subsonic api, so any subsonic client works. the library is mounted read-only, rescanned hourly, and sessions last 24 hours. navidrome is reachable only on the lan and the tailnet. a small shim i wrote sits beside it, talks to navidrome's api, and is the only service with write access to the library.
 
-## keeping it up
+## reliability
 
-assume 3am me is asleep and not coming, so the boring failures have to fix themselves:
+the system should recover from routine failures without me:
 
-- every container is `always` or `unless-stopped`, so a crash or a reboot just comes back
-- the tunnel waits for the proxy's healthcheck, so traffic never lands on a half-booted nginx
-- immich's postgres is pinned by digest with data checksums on, so upgrades don't surprise me and corruption is loud
-- uptime kuma checks each app directly and through the proxy, because a green proxy in front of a dead app is just lying to you
-- beszel watches cpu, memory, disk and temps for the host and every container
-- unattended-upgrades does the security patches
-- tcp keepalives at a minute instead of two hours, so a dead connection gets noticed and reopened fast instead of hanging
+- every container runs with `always` or `unless-stopped`, so crashes and reboots recover on their own
+- the tunnel starts only after the proxy's healthcheck passes, so traffic never reaches a proxy that's still starting
+- immich's postgres image is pinned by digest and initialised with data checksums, so upgrades are explicit and corruption is detected
+- uptime kuma checks every app directly as well as through the proxy, which separates a proxy failure from an app failure
+- beszel records cpu, memory, disk, network and temperature for the host and each container
+- unattended-upgrades applies security patches
 
 ## backups
 
 ```text
 01:30  backup_configs.sh -> server-configs
 02:00  backrest (restic) -> backblaze b2
-03:00  prune, monthly check, 30 daily + 12 monthly
+03:00  prune; monthly integrity check; 30 daily, 12 monthly snapshots
 ```
 
-that script exists because of three bugs. root-only configs failed with permission denied, so they're read through `docker exec`. live sqlite can tear mid-copy, so beszel goes through `sqlite3.backup()`. and the restic password was living in a config that got backed up into the repo that needs the password to open. very secure, very useless. it lives outside the system now. [`scripts/backup_configs.sh`](scripts/backup_configs.sh)
+the config script handles three cases a plain copy gets wrong. root-owned `0600` configs are read through `docker exec`. beszel's sqlite database is copied with `sqlite3.backup()` so a write in progress can't produce a torn copy. and the restic repository password, which used to sit in a config that was itself backed up into that repository, is now kept outside the system, since a copy only reachable through the password can't recover the password. [`scripts/backup_configs.sh`](scripts/backup_configs.sh)
 
-## what's on it
+## storage
 
-~32 GB of photos that immich mounts read-only (it can index everything and delete nothing), ~24 GB of immich uploads and thumbnails with face search running locally, filebrowser and samba over the same share, navidrome for music, adguard for dns, plus backrest, uptime kuma and beszel. n8n, open webui and logseq lived here for a bit, didn't earn their ram, got evicted.
+about 32 GB of original photos, mounted read-only into immich so it can index them but never modify them. about 24 GB of immich uploads and thumbnails, with face and object search running locally. filebrowser and samba expose the same share. n8n, open webui and logseq ran here earlier and have since been retired; their configs remain in the backup bundle.
 
 ## second brain
 
-obsidian, plain markdown on google drive, mounted on the box with an `rclone` user service so every machine and agent reads the same files. yes it's google drive. i own the files, not the disk.
+my notes are obsidian vaults stored as plain markdown on google drive, mounted on the server by an `rclone` systemd user service, so every machine and every agent reads the same files. the storage provider is incidental; the requirement is plain files i hold a copy of.
 
 ```text
 obsidian/
-  skills/  technicals/  space/  startups/
-  meeting-notes/   raw transcripts, source only
-  private/         agents stay out
+  skills/          agent instructions and skills
+  technicals/  space/  startups/
+  meeting-notes/   raw transcripts, source material only
+  private/         excluded from agent use
 ```
 
-`home.md` links to folder indexes, indexes say what each note explains, and an agent finds anything in two `rg` hops. notes assume zero context because the reader is usually me in six months, and wrong answers stay next to the right ones because that's the useful part.
+each vault has a `home.md` linking to folder indexes, and each index line states what its note explains, so an agent can reach any note in a couple of `rg` lookups. notes are written for a reader with no context, and corrections are kept alongside the original reasoning instead of overwriting it.
 
-claude code and codex read the same instruction file and skills, symlinked out of `obsidian/skills/`, so one edit changes both agents everywhere. one skill turns a long technical convo into a note and refuses to write unless the vault actually checks out (home note exists, notes exist, exactly one `.obsidian`).
+claude code and codex load the same instruction file and skills, symlinked out of `obsidian/skills/`, so one edit updates both agents on every machine. one skill converts a long technical conversation into a note, and it refuses to write unless the vault passes three checks: a `home.md` exists, the vault contains notes, and exactly one `.obsidian` directory is present.
 
 ## long-running agents
 
-this is honestly what the box does most now. claude code and codex run on the thinkpad, not on my laptop. tmux starts at boot as a systemd user service with lingering on, so sessions don't care whether i'm logged in, and an agent can grind through a six-hour task while my laptop is closed in a bag.
+claude code and codex run on the server, not on my laptop. tmux is started at boot by a systemd user service with lingering enabled, so sessions continue regardless of whether i'm connected, and a multi-hour task keeps running with the laptop closed.
 
-i attach from the mac over the tailnet (direct wireguard, ~190ms) or the tunnel, and every tmux window shows up as a tab in cmux. clipboard and notifications pass through tmux to the mac, so an agent finishing or asking for permission actually pings me. the only thing crossing the pacific is my typing. the agents, their files and their git checkouts all live next to each other on the box.
+i attach from the mac over the tailnet (~190ms) or the tunnel, and cmux shows each tmux window as a tab. tmux passes clipboard and notification escape sequences through, so permission prompts and completions reach the mac. the agents, their working trees and their tools all live on the server; only terminal input crosses the pacific.
 
-the agents read their instructions and skills from the second brain, so a fresh session on any machine starts with the same rules. and because i usually have too many running at once, two tools came out of this: [agent-squad](https://github.com/adhikrysh/agent-squad), a dashboard of every claude code and codex session sorted by who's waiting on me, and [ghostty-agent-workspace](https://github.com/adhikrysh/ghostty-agent-workspace), a one-command terminal layout.
+two tools came out of running many sessions in parallel: [agent-squad](https://github.com/adhikrysh/agent-squad), a read-only dashboard of every claude code and codex session ordered by which ones are waiting on me, and [ghostty-agent-workspace](https://github.com/adhikrysh/ghostty-agent-workspace), a scripted terminal layout for working alongside them.
 
-the rules i give them: make me think, say what you checked versus assumed, cli before api before mcp before browser, and give cheap work to cheap models but check it.
+the agents' standing instructions: push me to reason instead of reasoning for me, separate what was verified from what was assumed, prefer cli over api over mcp over a browser, and delegate simple work to smaller models but verify the result.
 
-configs and scripts are in this repo, secrets removed.
+configs and scripts are in this repo with secrets removed.

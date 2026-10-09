@@ -50,9 +50,25 @@ first byte      182 ms
 
 the server takes ~30ms. the pacific takes the rest and refuses to negotiate. so i cut round trips instead: bbr + `fq`, tcp fast open, no slow start after idle, shorter keepalives, gzip at 5, and http/2, which was somehow off on every proxy host. details in [`docs/latency.md`](docs/latency.md).
 
+## dns
+
+adguard home is the dns resolver for my devices, so ads and trackers die at dns before anything even loads them. it also caches, which matters more than the blocking: a cold lookup was ~123ms and a cached one ~3ms, and with the pacific in the way i'll take every free 120ms i can get. its config is root-only, so the nightly backup reads it through `docker exec`.
+
+## music
+
+my music runs on navidrome, which speaks the subsonic api, so basically any subsonic app on my phone or laptop just works against it. the library is mounted read-only, it rescans every hour, and sessions last a day so i'm not logging in every time i open the app. navidrome itself is only on the lan and the tailnet, never public. next to it there's a small shim i wrote that talks to navidrome's api and is the only thing allowed to write into the library.
+
 ## keeping it up
 
-assume 3am me is asleep and not coming. containers restart themselves, the tunnel waits for the proxy's healthcheck, immich's postgres is pinned by digest with checksums on, and unattended-upgrades does patches. uptime kuma checks each app directly and through the proxy, because a green proxy in front of a dead app is just lying to you. beszel watches cpu, memory, disk and temps per container.
+assume 3am me is asleep and not coming, so the boring failures have to fix themselves:
+
+- every container is `always` or `unless-stopped`, so a crash or a reboot just comes back
+- the tunnel waits for the proxy's healthcheck, so traffic never lands on a half-booted nginx
+- immich's postgres is pinned by digest with data checksums on, so upgrades don't surprise me and corruption is loud
+- uptime kuma checks each app directly and through the proxy, because a green proxy in front of a dead app is just lying to you
+- beszel watches cpu, memory, disk and temps for the host and every container
+- unattended-upgrades does the security patches
+- tcp keepalives at a minute instead of two hours, so a dead connection gets noticed and reopened fast instead of hanging
 
 ## backups
 
@@ -66,7 +82,7 @@ that script exists because of three bugs. root-only configs failed with permissi
 
 ## what's on it
 
-~32 GB of photos that immich mounts read-only (it can index everything and delete nothing), ~24 GB of immich uploads and thumbnails with face search running locally, filebrowser and samba over the same share, plus backrest, uptime kuma and beszel. n8n, open webui and logseq lived here for a bit, didn't earn their ram, got evicted.
+~32 GB of photos that immich mounts read-only (it can index everything and delete nothing), ~24 GB of immich uploads and thumbnails with face search running locally, filebrowser and samba over the same share, navidrome for music, adguard for dns, plus backrest, uptime kuma and beszel. n8n, open webui and logseq lived here for a bit, didn't earn their ram, got evicted.
 
 ## second brain
 
@@ -83,9 +99,13 @@ obsidian/
 
 claude code and codex read the same instruction file and skills, symlinked out of `obsidian/skills/`, so one edit changes both agents everywhere. one skill turns a long technical convo into a note and refuses to write unless the vault actually checks out (home note exists, notes exist, exactly one `.obsidian`).
 
-## agents
+## long-running agents
 
-tmux starts at boot so sessions outlive my laptop lid. two tools came out of running too many agents at once: [agent-squad](https://github.com/adhikrysh/agent-squad), a dashboard of every claude code and codex session sorted by who's waiting on me, and [ghostty-agent-workspace](https://github.com/adhikrysh/ghostty-agent-workspace), a one-command terminal layout.
+this is honestly what the box does most now. claude code and codex run on the thinkpad, not on my laptop. tmux starts at boot as a systemd user service with lingering on, so sessions don't care whether i'm logged in, and an agent can grind through a six-hour task while my laptop is closed in a bag.
+
+i attach from the mac over the tailnet (direct wireguard, ~190ms) or the tunnel, and every tmux window shows up as a tab in cmux. clipboard and notifications pass through tmux to the mac, so an agent finishing or asking for permission actually pings me. the only thing crossing the pacific is my typing. the agents, their files and their git checkouts all live next to each other on the box.
+
+the agents read their instructions and skills from the second brain, so a fresh session on any machine starts with the same rules. and because i usually have too many running at once, two tools came out of this: [agent-squad](https://github.com/adhikrysh/agent-squad), a dashboard of every claude code and codex session sorted by who's waiting on me, and [ghostty-agent-workspace](https://github.com/adhikrysh/ghostty-agent-workspace), a one-command terminal layout.
 
 the rules i give them: make me think, say what you checked versus assumed, cli before api before mcp before browser, and give cheap work to cheap models but check it.
 

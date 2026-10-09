@@ -1,0 +1,33 @@
+# music: navidrome (subsonic api) with the library read-only, plus a small shim that is the only writer.
+# lan + tailnet only. the original stack also runs its own tunnel, omitted here.
+services:
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: navidrome
+    restart: unless-stopped
+    ports:
+      - "4533:4533"   # reachable on tailnet + LAN; NOT public (server is NAT-bound)
+    environment:
+      ND_LOGLEVEL: info
+      ND_SCANSCHEDULE: "1h"
+      ND_SESSIONTIMEOUT: "24h"
+      ND_ENABLETRANSCODINGCONFIG: "false"
+    volumes:
+      - ./music:/music:ro
+      - ./navidrome-data:/data
+
+
+  shim:
+    build: ./shim
+    image: retspan-shim:latest
+    container_name: shim
+    restart: unless-stopped
+    environment:
+      NAVIDROME_URL: http://navidrome:4533
+      MUSIC_DIR: /music
+    volumes:
+      - ./music:/music
+    ports:
+      - "4544:4544"
+    depends_on:
+      - navidrome

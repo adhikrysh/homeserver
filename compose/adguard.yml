@@ -1,0 +1,20 @@
+# dns: adguard home, the resolver and cache for my devices. config is root-only, so backups read it via docker exec.
+services:
+  adguard:
+    image: adguard/adguardhome
+    container_name: adguard
+    restart: unless-stopped
+    # For DNS, we MUST open the ports to the real world (your house)
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "3000:3000/tcp" # Initial Setup Wizard
+    volumes:
+      - ./work:/opt/adguardhome/work
+      - ./conf:/opt/adguardhome/conf
+    networks:
+      - adguard-network
+
+networks:
+  adguard-network:
+    external: true

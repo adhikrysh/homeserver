@@ -35,7 +35,7 @@ nightly
 - **host:** thinkpad t480, i5-8350U, ~24 GB ram, 477 GB nvme, ubuntu 24.04 lts. battery held at 75-80% as a small built-in ups.
 - **ingress:** cloudflare tunnel (`cloudflared`) + cloudflare access (zero trust) + nginx proxy manager. a wildcard dns record sends every subdomain to the tunnel.
 - **private access:** ssh and a finder mount over the same tunnel with `cloudflared access tcp`; tailscale as a second, independent path.
-- **apps:** immich (photos with machine-learning search), filebrowser, samba, backrest, uptime kuma, beszel.
+- **apps:** immich (photos with machine-learning search), navidrome (music), adguard home (dns), filebrowser, samba, backrest, uptime kuma, beszel.
 - **backups:** a nightly config bundle, then restic to backblaze b2 through backrest.
 - **second brain:** obsidian vaults on google drive, mounted by an `rclone` systemd user service; claude code and codex share one instruction file and one set of skills from inside it.
 
